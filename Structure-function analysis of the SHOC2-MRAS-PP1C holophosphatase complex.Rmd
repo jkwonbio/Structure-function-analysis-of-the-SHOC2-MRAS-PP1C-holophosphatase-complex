@@ -1,0 +1,608 @@
+---
+title: "Structure-function analysis of the SHOC2-MRAS-PP1C holophosphatase complex"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+#Load in relevant packages
+```{r}
+library(dplyr)
+library(tidyverse)
+library(here)
+library(magrittr)
+library(useful)
+library(plotly)
+library(ggrepel)
+library(ggbeeswarm)
+```
+
+
+
+# making Energy contact surface figure - Fig 2b
+```{r}
+
+bond <- read.csv(here::here('data','2022.4.19.Final.correct.complex.interact.energy.csv'))
+
+SM <- bond %>% 
+  filter(interaction == "SHOC2-MRAS")
+
+SP <- bond %>% 
+  filter(interaction == "SHOC2-PP1C")
+
+MP <- bond %>% 
+  filter(interaction == "MRAS-PP1C")
+
+
+#key figure
+ggplot(bond)  + 
+  geom_bar(aes(x=order, y=rel_add_normneg40),stat="identity") + scale_color_manual(values=c("#CC6666", "#9999CC")) +
+  geom_line(aes(x=order, y=rel_order_norm_neg300),stat="identity",color="red",size=1)+
+  scale_y_continuous(sec.axis=sec_axis(~.*0.01,name="Percentage")) + facet_grid(~interaction) + theme_light() 
+
+
+
+```
+
+# DMS ANALYSIS STEP1 #Scale DMS log fold change (LFC) data, centered at mean silent and scaled to mean of nonsense
+```{r}
+
+#read in DMS data
+SHOC2_DMS <- read.csv(here::here('data','Final_LFC_norm.csv'))
+
+
+SHOC2_DMS <- SHOC2_DMS %>% 
+  dplyr::select(c(POS, Vt_aa, LFC_ct_frctn_adj.z)) %>% 
+  pivot_wider(names_from = POS, values_from = LFC_ct_frctn_adj.z) %>% 
+  column_to_rownames(var = "Vt_aa") %>% 
+  as.matrix() 
+
+#B is silent
+silent_effect <- SHOC2_DMS['B',] %>% mean(na.rm=T)
+
+tmp <- SHOC2_DMS - silent_effect
+
+#X is nonsense
+nonsense_effect <- tmp['X',] %>% mean(na.rm=T)
+
+rescaled <- tmp/abs(nonsense_effect)
+
+rescaled['X',] %>% mean(na.rm=T)
+rescaled['B',] %>% mean(na.rm=T)
+
+#matrix used for all downstream analyses
+mat <- rescaled[setdiff(rownames(rescaled), c('B', 'X')),]
+
+```
+
+#generating heatmaps - Fig 3a and Extended Data Fig 8
+```{r}
+###MAKE SURE TO RUN above STEP1 (#Scale DMS log fold change (LFC) data, centered at mean silent and scaled to mean of nonsense) before running this
+# Annotations -------------------------------------------------------------
+REAL_LRR_POSITIONS <- read.csv(here::here('data', 'Correct_LRRnum_CIRCpos.csv'))
+Aminode_accessed_2021.11.23 <- read.csv(here::here('data','Aminode_accessed_2021.11.23.csv'))
+evo <- Aminode_accessed_2021.11.23[,c(1,3)]
+contact_v_nocontact <- read.csv(here::here('data','contact_v_nocontact.csv'))
+
+tmp <- list("Small Hydrophobic" = c("A", "I", "L", "M", "V"), "Special Cases" = c("C","G","P"), "Polar Uncharged" = c("S","T","N","Q"), "Positive" = c("K","R","H"), "Negative" = c("D","E"), "Large Hydrophobic" = c("F", "W", "Y"), "Nonsense" = c("X"), "Silent" = c("B")) %>% 
+  enframe() %>% 
+  unnest()
+
+contact_types <- split(contact_v_nocontact, contact_v_nocontact$Core_resi)
+
+tmp2 <- tibble(POS = 1:582) %>% #left_join(stability) %>% 
+  left_join(REAL_LRR_POSITIONS %>% 
+              select(POS, LRR_xtal)) %>% 
+  left_join(contact_v_nocontact %>% 
+              filter(Core_resi %in% c('PP1C_interact', 'MRASandPP1C_interact', 'MRAS_interact')) %>% 
+              rename(PPI = Core_resi)) %>% 
+  #left_join(contact_types$Core_Residue %>% rename(Core = Core_resi)) %>% 
+  #left_join(contact_types$Non_Contact_Surface_Residue %>% rename(Surface = Core_resi)) %>% 
+  left_join(evo) %>% 
+  column_to_rownames(var = "POS") 
+
+
+gaps <- REAL_LRR_POSITIONS %>% 
+  group_by(LRR_xtal) %>% 
+  summarize(POS = min(POS)) %>% 
+  pull(POS)
+# Plotting ----------------------------------------------------------------
+
+ann_colors = list(
+  Substitution.Score = c("white", "black"),
+  LRR_xtal = rep("#00B18B",20) %>% set_names(REAL_LRR_POSITIONS$LRR_xtal %>% unique()),
+  PPI = c("MRAS_interact" = '#ED2386', 
+          "PP1C_interact" = '#FAA41A', 
+          "MRASandPP1C_interact" = '#675EA9')
+)
+
+library(pheatmap)
+pheatmap::pheatmap(mat[tmp$value[1:20],],
+                   border_color = "black",
+                   cluster_rows=FALSE,
+                   breaks = seq(-3, 1, length.out=1000),
+                   color=colorRampPalette(c("navy",
+                                            "blue",
+                                            "#a0a0fa",
+                                            "white", 
+                                            "red"))(1000), 
+                   cluster_cols=FALSE, 
+                   annotation_row=tmp %>% column_to_rownames("value"), 
+                   annotation_col = tmp2,
+                   na_col = 'grey', show_colnames=F,
+                   annotation_colors = ann_colors,
+                   cellwidth = 1, cellheight = 10,
+                   gaps_col = which(colnames(mat) %in% c(gaps-1, 553))
+                   
+                   ,
+                   filename = "shoc2-heatmap.pdf")
+
+
+
+
+#With numbers
+
+jason_labels <- c("223", "177", "131", "203", "200", "178", "63", "64", "65", "66", "411", "434", "154", "316", "244", "288", "133", "156", "316", "293", "129")
+mask <- which(!(colnames(mat) %in% jason_labels))
+
+new_colnames <- colnames(mat)
+
+new_colnames[mask] <- ""
+
+library(pheatmap)
+pheatmap::pheatmap(mat[tmp$value[1:20],] %>% magrittr::set_colnames(new_colnames),
+                   border_color = "black",
+                   cluster_rows=FALSE,breaks = seq(-3, 3, length.out=1000),
+                   color=colorRampPalette(c("navy",
+                                            "white", 
+                                            "red"))(1000), 
+                   cluster_cols=FALSE, 
+                   annotation_row=tmp %>% column_to_rownames("value"), 
+                   annotation_col = tmp2,
+                   na_col = 'grey', show_colnames=T,fontsize_col = 4,
+                   annotation_colors = ann_colors,
+                   cellwidth = 1, cellheight = 10,
+                   gaps_col = which(colnames(mat) %in% c(gaps-1, 553)),
+                   filename = "shoc2_heatmap_w_numbers.pdf")
+
+
+
+
+# Mega heatmap ------------------------------------------------------------
+
+pheatmap::pheatmap(mat[tmp$value[1:20],],
+                   border_color = "black",
+                   cluster_rows=FALSE,
+                   breaks = seq(-3, 1, length.out=1000),
+                   color=colorRampPalette(c("navy",
+                                            "blue",
+                                            "#a0a0fa",
+                                            "white", 
+                                            "red"))(1000),  
+                   cluster_cols=FALSE, 
+                   annotation_row=tmp %>% column_to_rownames("value"), 
+                   annotation_col = tmp2,
+                   na_col = 'grey', show_colnames=T,
+                   annotation_colors = ann_colors,
+                   cellwidth = 10, cellheight = 10,
+                   gaps_col = which(colnames(mat) %in% c(gaps-1, 553))
+                   
+                   ,
+                   filename = "shoc2-heatmap_large.pdf")
+
+
+# Amino acid level features -----------------------------------------------
+aa_groups = list("Neg/Acidic"= c("D", "E"),
+     "Pos/Basic"= c("K", "R"),
+     "Polar_uncharged"= c("S", "T", "C", "Y", "N", "Q"),
+     "Non-polar_non-aromatic"= c("G", "A", "V", "L", "I", "M"),
+     #"Proline"= c("P"),
+     "Non-polar_large-aromatic"= c("F", "W"),
+     "Helix_Breaker"= c("G", "P"),
+     "Aromatic"= c("F","W", "Y", "H"),
+     "Charged"= c("R", "K", "D", "E", "H"),
+     "Aliphatic"= c("P", "A", "L", "V", "I"))
+
+map_df(aa_groups, function(x) colMeans(mat[x,],na.rm = T), .id = "group") %>% 
+  pivot_longer(names_to = "Index", values_to = "Score", -group) %>% 
+  mutate(Index= as.numeric(Index)) %>% 
+  ggplot(aes(Index, Score, group = group, color = group)) + 
+  geom_line()+
+  facet_wrap(~group, ncol=1)
+
+
+tmp <- map_df(aa_groups, function(x) colMeans(mat[x,],na.rm = T), .id = "group") %>% 
+  pivot_longer(names_to = "POS", values_to = "Score", -group) %>% 
+  mutate(Index= as.numeric(POS))
+write.csv(tmp, here::here('results','aa_group_average_per_position.csv'))
+
+map(aa_groups, function(x) colMeans(mat[x,],na.rm = T)) %>% 
+  do.call(rbind, .) %>% 
+  pheatmap(
+           border_color = "black",
+           cluster_rows=FALSE,breaks = seq(-3, 3, length.out=1000),
+           color=colorRampPalette(c("navy",
+                                    "white", 
+                                    "red"))(1000), 
+           cluster_cols=FALSE)
+
+aa_group_mat <- map(aa_groups, function(x) colMeans(mat[x,],na.rm = T)) %>% 
+  do.call(rbind, .)
+           
+pheatmap::pheatmap(map(aa_groups[1:6], function(x) colMeans(mat[x,],na.rm = T)) %>% 
+                     do.call(rbind, .),
+                   border_color = "black",
+                   cluster_rows=FALSE,
+                   #breaks = seq(-3, 3, length.out=1000),
+                   color=colorRampPalette(c("purple",
+                                            "white", 
+                                            "orange"))(1000), 
+                   cluster_cols=FALSE, 
+                   na_col = 'grey', 
+                   show_colnames=T,
+                   annotation_colors = ann_colors,
+                   cellwidth = 10, cellheight = 10,
+                   gaps_col = which(colnames(mat) %in% c(gaps-1, 553))
+                   
+                   ,
+                   filename = "aa-heatmap_large.pdf")
+
+```
+
+# DMS ANALYSIS STEP2 #Writing Supplementary Information Table 2 and plotting Fig 3c
+```{r}
+## Writing Supplementary Information Table 2 - tab "Variant Level Scaled LFC"
+#read in DMS file
+tmp1 <- read.csv(here::here('data','Final_LFC_norm.csv'))
+output <- tmp1 %>% left_join(
+  
+  rescaled %>% 
+    as_tibble(rownames = "Vt_aa") %>% 
+    pivot_longer(names_to = "POS", values_to = "LFC_scaled", -Vt_aa) %>% 
+    mutate(POS = as.numeric(POS))
+)
+
+output %>% 
+  filter(Vt_aa == "B") %>% 
+  pull("LFC_scaled") %>% 
+  mean()
+#result = 0
+
+output %>% 
+  filter(Vt_aa == "X") %>% 
+  pull("LFC_scaled") %>% 
+  mean()
+#result: -1
+
+output %<>% 
+  select(c("POS", "Vt_aa", "Wt_aa", "variant.by.aa", "Type", "LFC_scaled"))
+  
+write.csv(output, here::here('results','scaled_LFC.csv'))
+
+## Writing Supplementary Information Table 2 - tab "Scaled LFC averaged by position"
+
+#generating meta data file with average LFC Zscore and ddg
+SHOC2AA <- c(unlist(strsplit("MSSSLGKEKDSKEKDPKVPSAKEREKEAKASGGFGKESKEKEPKTKGKDAKDGKKDSSAAQPGVAFSVDNTIKRPNPAPGTRKKSSNAEVIKELNKCREENSMRLDLSKRSIHILPSSIKELTQLTELYLYSNKLQSLPAEVGCLVNLMTLALSENSLTSLPDSLDNLKKLRMLDLRHNKLREIPSVVYRLDSLTTLYLRFNRITTVEKDIKNLSKLSMLSIRENKIKQLPAEIGELCNLITLDVAHNQLEHLPKEIGNCTQITNLDLQHNELLDLPDTIGNLSSLSRLGLRYNRLSAIPRSLAKCSALEELNLENNNISTLPESLLSSLVKLNSLTLARNCFQLYPVGGPSQFSTIYSLNMEHNRINKIPFGIFSRAKVLSKLNMKDNQLTSLPLDFGTWTSMVELNLATNQLTKIPEDVSGLVSLEVLILSNNLLKKLPHGLGNLRKLRELDLEENKLESLPNEIAYLKDLQKLVLTNNQLTTLPRGIGHLTNLTHLGLGENLLTHLPEEIGTLENLEELYLNDNPNLHSLPFELALCSKLSIMSIENCPLSHLPPQIVAGGPSFIIQFLKMQGPYRAMV", split="")))
+
+#Known biophysical properties of AA
+H1 <- str_replace_all(SHOC2AA, c("A" = "0.62", "C" = "0.29", "D" = "-0.9", "E" = "-0.74", "F" = "1.19", "G" = "0.48", "H" = "-0.4", "I" = "1.38", "K" = "-1.5", "L" = "1.06", "M" = "0.64", "N" = "-0.78", "P" = "0.12", "Q" = "-0.85", "R" = "-2.53", "S" = "-0.18", "T" = "-0.05", "V" = "1.08", "W" = "0.81", "Y" = "0.26"))
+H2 <- str_replace_all(SHOC2AA, c("A" = "-0.5", "C" = "-1", "D" = "3", "E" = "3", "F" = "-2.5", "G" = "0", "H" = "-0.5", "I" = "-1.8", "K" = "3", "L" = "-1.8", "M" = "-1.3", "N" = "2", "P" = "0", "Q" = "0.2", "R" = "3", "S" = "0.3", "T" = "-0.4", "V" = "-1.5", "W" = "-3.4", "Y" = "-2.3"))
+H3 <- str_replace_all(SHOC2AA, c("A" = "2", "C" = "2", "D" = "4", "E" = "4", "F" = "2", "G" = "2", "H" = "4", "I" = "2", "K" = "2", "L" = "2", "M" = "2", "N" = "4", "P" = "2", "Q" = "4", "R" = "4", "S" = "4", "T" = "4", "V" = "2", "W" = "3", "Y" = "3"))
+V <- str_replace_all(SHOC2AA, c("A" = "27.5", "C" = "44.6", "D" = "40", "E" = "62", "F" = "115.5", "G" = "0", "H" = "79", "I" = "93.5", "K" = "100", "L" = "93.5", "M" = "94.1", "N" = "58.7", "P" = "41.9", "Q" = "80.7", "R" = "105", "S" = "29.3", "T" = "51.3", "V" = "71.5", "W" = "145.5", "Y" = "117.3"))
+P1 <- str_replace_all(SHOC2AA, c("A" = "8.1", "C" = "5.5", "D" = "13", "E" = "12.3", "F" = "5.2", "G" = "9", "H" = "10.4", "I" = "5.2", "K" = "11.3", "L" = "4.9", "M" = "5.7", "N" = "11.6", "P" = "8", "Q" = "10.5", "R" = "10.5", "S" = "9.2", "T" = "8.6", "V" = "5.9", "W" = "5.4", "Y" = "6.2"))
+P2 <- str_replace_all(SHOC2AA, c("A" = "0.046", "C" = "0.128", "D" = "0.105", "E" = "0.151", "F" = "0.29", "G" = "0", "H" = "0.23", "I" = "0.186", "K" = "0.219", "L" = "0.186", "M" = "0.221", "N" = "0.134", "P" = "0.131", "Q" = "0.18", "R" = "0.18", "S" = "0.062", "T" = "0.108", "V" = "0.14", "W" = "0.409", "Y" = "0.298"))
+SASA <- str_replace_all(SHOC2AA, c("A" = "1.181", "C" = "1.461", "D" = "1.587", "E" = "1.862", "F" = "2.228", "G" = "0.881", "H" = "2.025", "I" = "1.81", "K" = "2.258", "L" = "1.931", "M" = "2.034", "N" = "1.655", "P" = "1.468", "Q" = "1.932", "R" = "1.932", "S" = "1.298", "T" = "1.525", "V" = "1.645", "W" = "2.663", "Y" = "2.368"))
+NCI <- str_replace_all(SHOC2AA, c("A" = "0.007187", "C" = "-0.03661", "D" = "-0.02382", "E" = "0.006802", "F" = "0.037552", "G" = "0.179052", "H" = "-0.01069", "I" = "0.021631", "K" = "0.017708", "L" = "0.051672", "M" = "0.002683", "N" = "0.005392", "P" = "0.239531", "Q" = "0.049211", "R" = "0.049211", "S" = "0.004627", "T" = "0.003352", "V" = "0.057004", "W" = "0.037977", "Y" = "0.023599"))
+MASS <- str_replace_all(SHOC2AA, c("A" = "71.0788", "C" = "103.1388", "D" = "115.0886", "E" = "129.1155", "F" = "147.1766", "G" = "57.0519", "H" = "137.1411", "I" = "113.1594", "K" = "128.1741", "L" = "113.1594", "M" = "131.1986", "N" = "114.1039", "P" = "97.1167", "Q" = "128.1307", "R" = "156.1875", "S" = "87.0782", "T" = "101.1051", "V" = "99.1326", "W" = "186.2132", "Y" = "163.176"))
+POS <- c(1:length(SHOC2AA))
+
+#combine
+SHOC2_positional_meta_file <-cbind(POS,SHOC2AA,H1, H2, H3, V, P1, P2, SASA, NCI, MASS)
+
+
+#Adding in structure information (core vs surface vs N-term - annotated based on Xtal data) and evolutionary frequency data (AMINODE accessed_2021.11.23)
+SHOC2_struct <- read.csv(here::here("data", "SHOC2_residue_structural_info.csv"))
+SHOC2_aminode <- read.csv(here::here("data", "SHOC2_aminode.csv"))
+
+SHOC2_positional_meta_file %<>% 
+  as.data.frame()
+
+SHOC2_positional_meta_file$POS <- as.integer(SHOC2_positional_meta_file$POS)
+
+SHOC2_positional_meta_file %<>% 
+    left_join(SHOC2_aminode, by = "POS") %>% 
+  left_join(SHOC2_struct, by = "POS")
+
+
+
+#generate per position mean viability from DMS screen
+
+SHOC2_DMS <- read.csv(here::here("data","scaled_LFC.csv"))
+
+TRAM_HM <- SHOC2_DMS %>% 
+  select(c(POS, Vt_aa, LFC_scaled)) %>% 
+  pivot_wider(names_from = POS, values_from = LFC_scaled) %>% 
+  column_to_rownames(var = "Vt_aa") %>% 
+  as.matrix() 
+
+#rearrange AA rows and remove silent (B) and nonsense (X)
+TRAM_HM <- TRAM_HM[c(1,9,11,12,18,3,7,14,22,17,13,15,16,8,10,4,5,6,19,21),]
+
+#remove NAs, replace with column means
+
+for(i in 1:ncol(TRAM_HM)) {                                   # Replace NA in all columns
+  TRAM_HM[ , i][is.na(TRAM_HM[ , i])] <- mean(TRAM_HM[ , i], na.rm = TRUE)
+}
+
+
+#create average mut_tol based on EXPERIMENTAL SCREEN DATA
+avg_intol <- TRAM_HM %>% t() %>%  as.data.frame() %>% rownames_to_column(var = "POS")
+avg_intol <-data.frame(POS=avg_intol[,1], mean_scale_LFC=rowMeans(avg_intol[,-1]))
+avg_intol$POS <- as.integer(avg_intol$POS)
+
+#add mean positional viability to metafile
+SHOC2_positional_meta_file %<>% left_join(avg_intol, by = "POS")
+
+# create mean positional FoldX/MutateX ddG (based on SHOC2 apo + Nterm from alphafold)
+SHOC2_ddG <- read.csv(here::here('data','SHOC2_apo_avg_ddg.csv'))
+
+SHOC2_ddG %<>% column_to_rownames(var = "res")
+colnames(SHOC2_ddG) = c(1:582) 
+avg_intol <- SHOC2_ddG %>% as.matrix() %>% t() %>%  as.data.frame() %>% rownames_to_column(var = "POS")
+avg_intol <-data.frame(POS=avg_intol[,1], avgMutateX=rowMeans(avg_intol[,-1]))
+avg_intol$POS <- as.integer(avg_intol$POS)
+
+#add mean free energy change ddG to metafile
+SHOC2_positional_meta_file %<>% left_join(avg_intol, by = "POS")
+
+write.csv(SHOC2_positional_meta_file, here::here('results','SHOC2_positional_meta_file.csv'))
+
+
+#Fig 3c
+
+#layer in absolute value of bonding energy
+bond <- read.csv(here::here('data','2022.4.19.Final.correct.complex.interact.energy.csv'))
+
+dw2 <- bond %>% 
+  select(c(POS,Energy)) %>% 
+  rownames_to_column(var='X') %>% 
+  spread(POS,Energy) 
+
+dw2[is.na(dw2)] <- 0
+dw2 <- data.matrix(dw2)
+
+dw3 <- colSums(dw2, na.rm = FALSE, dims = 1) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Name")
+colnames(dw3) = c("POS", "Energy")
+dw3 <- dw3[-c(1,62),]
+
+dw3$POS <- as.integer(dw3$POS)
+
+Fig3c <- SHOC2_positional_meta_file  %>%  left_join(dw3, by = "POS") 
+
+Fig3c %<>% 
+  mutate(absolute_E = abs(Energy))
+
+#layering in contact and core v surface information
+contact <- read.csv(here::here('data','contact_v_nocontact.csv'))
+
+Fig3c %<>% 
+  left_join(contact, by = "POS") 
+
+#add in AA label - symbol + position number
+
+Fig3c %<>% 
+  unite("AAnum", c(SHOC2AA,POS), remove = FALSE) 
+Fig3c$AAnum <- gsub( "_", "", Fig3c$AAnum)
+
+
+#### Plotting FIGURE 3c
+label <- Fig3c %>% 
+  dplyr::filter(mean_scale_LFC <=-1 | mean_scale_LFC >=0.2) %>% 
+  dplyr::filter(absolute_E > 0)
+Fig3c %>% 
+ggplot(aes(x=mean_scale_LFC, y =avgMutateX, label = AAnum, color = Core_resi)) + geom_point() + theme_classic() + scale_color_manual( values=c("green4", "deeppink2", "slateblue","seagreen3", "orange1")) + labs(y="Average Mutational Free Energy change (ddG)", x = "Mean Viability (LFC scaled) ") + geom_label_repel(data = label, size = 6, force=10,force_pull=.1)+theme(axis.text=element_text(size=18),
+        axis.title=element_text(size=18,face="bold"))  + xlim(-2, 1)
+
+#output for raw data table
+write.csv(Fig3c,here::here('results','raw_data_Fig3c.csv'))
+
+#Extended Data Fig9a - violin plot of interface residues vs core vs non interacting surface in DMS screen
+x <- Fig3c %>% 
+  dplyr::filter(Core_resi != "MRASandPP1C_interact") %>% 
+  arrange(match(Core_resi, c("PP1C_interact", "MRAS_interact", "Core_Residue", "Non_Contact_Surface_Residue"))) 
+  
+x$Core_resi <- factor(x$Core_resi,
+    levels = c("PP1C_interact", "MRAS_interact", "Core_Residue", "Non_Contact_Surface_Residue"),ordered = TRUE) 
+  
+  ggplot(x, aes(Core_resi, mean_scale_LFC,label = POS)) + geom_violin(aes(fill = Core_resi)) +
+    geom_boxplot(aes(fill = Core_resi), width=0.1, color="black")+ geom_beeswarm(size = .4) + theme_classic()  + scale_fill_manual( values=c("orange1", "deeppink2", "seagreen4", "seagreen2")) + labs(y="Mean Viability (scaled LFC)", x = "SHOC2 Residue: Binding vs Core vs Surface ")
+
+x %>% group_by(Core_resi) %>% summary(ln = length())
+
+#output for raw data table
+write.csv(x, here::here('results','Extended_Data_Fig9a.csv'))
+```
+
+#multiple linear regression model for M173 - Extended Data Fig 4d-f
+```{r}
+
+library(tidyverse)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+x <- read.csv(here::here('data','M173_energy_multi_regress.csv'))
+
+
+
+
+
+#plot interaction energy change (kcal/mol)
+x %>% 
+  ggplot(aes(LFC_scaled, delta_WT_interaction_kcal_mol, label = variant.by.aa)) +
+  geom_smooth(method=lm , color="blue", fill="grey", se=TRUE)+ geom_point() + geom_label_repel() + theme_bw()
+
+#plot intrinsic stability (ddG)
+x %>% 
+  ggplot(aes(LFC_scaled, ddG_intrinsic, label = variant.by.aa)) +
+  geom_smooth(method=lm , color="blue", fill="grey", se=TRUE)+ geom_point() + geom_label_repel() + theme_bw()
+
+
+####develop multiple linear regression model with intrinsic and protein interaction
+model <- lm(LFC_scaled ~ delta_WT_interaction_kcal_mol + ddG_intrinsic, data = x)
+summary(model)
+
+#create variable that reflects output of multiple linear regression model above
+x %<>% 
+  mutate(lm_regress = 0.12125*delta_WT_interaction_kcal_mol + 0.25040*ddG_intrinsic - 0.74762)
+
+#plot multiple linear regression model
+x %>% 
+  ggplot(aes(LFC_scaled, lm_regress, label = variant.by.aa)) +
+  geom_smooth(method=lm , color="blue", fill="grey", se=TRUE)+ geom_point() + geom_label_repel() + theme_bw()
+
+
+#write data table
+write.csv(x, here::here('results','Extended Data Fig 3def.csv'))
+
+
+```
+
+
+#boxplot of stabilizing vs destabilizing variants - Extended Data Fig 10u
+```{r}
+
+##RUN STEP 1 and 2 for DMS Analysis Above##
+
+#read in foldx contact energy profiles for mutations across SHOC2 and complex members files
+MRAS_SHOC2 <- read.csv(here::here('data','Foldx_A_C_ddg_MRAS-SHOC2.csv'))
+PP1C_SHOC2 <- read.csv(here::here('data','FOLDx_B_C_PP1C-SHOC2.csv'))
+
+
+#pull SHOC2 residues
+mSHOC2 <- MRAS_SHOC2[,c(1,468:972)]
+mSHOC2 %<>% column_to_rownames(var = "res")
+mheader <- c(colnames(mSHOC2))
+colnames(mSHOC2) <- parse_number(mheader)
+mSHOC2 %<>% rownames_to_column(var = "sub") 
+
+pSHOC2 <- PP1C_SHOC2[,c(1,468:972)]
+pSHOC2  %<>% column_to_rownames(var = "res")
+pheader <- c(colnames(pSHOC2))
+colnames(pSHOC2) <- parse_number(pheader)
+pSHOC2 %<>% rownames_to_column(var = "sub") 
+
+
+#add wt_aa
+wt_aa <- c(unlist(strsplit("MSSSLGKEKDSKEKDPKVPSAKEREKEAKASGGFGKESKEKEPKTKGKDAKDGKKDSSAAQPGVAFSVDNTIKRPNPAPGTRKKSSNAEVIKELNKCREENSMRLDLSKRSIHILPSSIKELTQLTELYLYSNKLQSLPAEVGCLVNLMTLALSENSLTSLPDSLDNLKKLRMLDLRHNKLREIPSVVYRLDSLTTLYLRFNRITTVEKDIKNLSKLSMLSIRENKIKQLPAEIGELCNLITLDVAHNQLEHLPKEIGNCTQITNLDLQHNELLDLPDTIGNLSSLSRLGLRYNRLSAIPRSLAKCSALEELNLENNNISTLPESLLSSLVKLNSLTLARNCFQLYPVGGPSQFSTIYSLNMEHNRINKIPFGIFSRAKVLSKLNMKDNQLTSLPLDFGTWTSMVELNLATNQLTKIPEDVSGLVSLEVLILSNNLLKKLPHGLGNLRKLRELDLEENKLESLPNEIAYLKDLQKLVLTNNQLTTLPRGIGHLTNLTHLGLGENLLTHLPEEIGTLENLEELYLNDNPNLHSLPFELALCSKLSIMSIENCPLSHLPPQIVAGGPSFIIQFLKMQGPYRAMV", split="")))
+POS <- c(1:582)
+y <- as.data.frame(cbind(wt_aa, POS))
+
+  
+#arrange into tidy format
+
+tidyM_SHOC2 <- mSHOC2%>% 
+  gather(as.character(parse_number(mheader)),key = "POS", value = "ddG_mras") %>% 
+  left_join(y, by = "POS")
+
+
+tidyP_SHOC2 <- pSHOC2 %>% 
+  gather(as.character(parse_number(pheader)),key = "POS", value = "ddG_pp1c") %>% 
+  left_join(y, by = "POS")
+
+#add varinat_by_aa
+tidyM_SHOC2 %<>% 
+   mutate(variant.by.aa = paste(wt_aa,POS,sub))
+
+tidyP_SHOC2 %<>% 
+  mutate(variant.by.aa = paste(wt_aa,POS,sub))
+
+
+
+tidyM_SHOC2$variant.by.aa <- gsub('\\s+', '', tidyM_SHOC2$variant.by.aa)
+
+
+tidyP_SHOC2$variant.by.aa <- gsub('\\s+', '', tidyP_SHOC2$variant.by.aa)
+
+#merge in dms data
+##MAKE SURE TO RUN STEP1 and 2 DMS ANALYSIS ABOVE to define "output" object##
+
+M <- tidyM_SHOC2 %>% 
+  left_join(output, by = "variant.by.aa") 
+
+
+P <- tidyP_SHOC2 %>% 
+  left_join(output, by = "variant.by.aa") 
+
+
+#generate categorlization based on ddG of each variant
+
+M$category <- cut(M$ddG_mras, 
+                   breaks=c(-Inf, -1, 1, Inf), 
+                   labels=c("stabilizing","inert","destabilizing"))
+
+
+
+P$category <- cut(P$ddG_pp1c, 
+                   breaks=c(-Inf, -1, 1, Inf), 
+                   labels=c("stabilizing","inert","destabilizing"))
+
+#subset based on surface residues
+contact <- read.csv(here::here('data','contact_v_nocontact.csv'))
+
+contact %<>% 
+  rename(POS.x = POS)
+
+contact$POS.x <- as.character(contact$POS.x)
+
+#combine for final plot
+
+M %<>% 
+  rename(ddG = ddG_mras)  %>% 
+  mutate(PPI = "MRAS") 
+  
+P %<>% 
+  rename(ddG = ddG_pp1c) %>% 
+  mutate(PPI = "PP1C")
+  
+all <- rbind(M, P)
+
+all$PPI <- factor(all$PPI, levels=c("PP1C", "MRAS"))
+
+
+all %>% 
+  left_join(contact, by = "POS.x") %>% 
+  filter(Core_resi != "Core_Residue") %>% 
+    filter(Core_resi != "Non_Contact_Surface_Residue") %>% 
+  filter(Type == 'missense') %>% 
+  ggplot(aes(category, LFC_scaled, fill = PPI)) + geom_boxplot(width = .5, outlier.colour = "black", outlier.shape = 1, outlier.size = .1) + scale_fill_manual(values = c("orange1", "deeppink2")) + theme_classic() +theme(axis.text=element_text(size=18),
+        axis.title=element_text(size=18,face="bold"))
+
+#export raw data file Extended Data Fig 10u
+tmp2 <- all %>% 
+  left_join(contact, by = "POS.x") %>% 
+  filter(Core_resi != "Core_Residue") %>% 
+    filter(Core_resi != "Non_Contact_Surface_Residue") %>% 
+  filter(Type == 'missense') 
+
+write.csv(tmp2, here::here('results','Extended Data Fig 10u.csv'))
+```
+
+
+
+
+
+
+
