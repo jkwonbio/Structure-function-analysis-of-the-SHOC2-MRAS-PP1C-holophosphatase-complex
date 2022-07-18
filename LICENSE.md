@@ -1,4 +1,8 @@
-Permission to use, copy, modify, and/or distribute this software and data for any
+The BSD Zero Clause License (0BSD)
+
+Copyright (c) 2022 jkwonbio
+
+Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted.
 
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
